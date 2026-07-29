@@ -58,10 +58,9 @@ export default function FocusTracker() {
 
         const initializeLandmarker = async () => {
 
-            const vision =
-                await FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-                );
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
+            );
 
             faceLandmarker =
                 await FaceLandmarker.createFromOptions(
