@@ -1,3 +1,4 @@
+# ── DyslexAid .gitignore additions ──────────────────────────────────────────
 # Logs
 logs
 *.log
@@ -22,3 +23,33 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Firebase Admin SDK service account key – NEVER commit these
+serviceAccountKey.json
+*serviceAccount*.json
+*.serviceAccount.json
+
+# Provisioning environment files
+scripts/.env.provision
+.env.provision
+server/.env
+
+# Local user backups
+backups/
+*.backup.json
+
+# General env files (keep .env.provision.example committed as template)
+.env
+.env.local
+.env.production
+
+# Firebase Admin SDK credentials
+**/*firebase-adminsdk*.json
+**/*service-account*.json
+**/serviceAccountKey.json
+
+# Python cache and virtual environments
+**/__pycache__/
+**/*.pyc
+**/venv/
+**/.venv/

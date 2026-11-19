@@ -1,28 +1,16 @@
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { auth } from "../firebase";
-import { onAuthStateChanged, signOut } from "firebase/auth";
+import { useState } from "react";
+import { useAuth } from "../hooks/useAuth";
 import toast from "react-hot-toast";
 
 export default function Navbar() {
 
     const [menuOpen, setMenuOpen] = useState(false);
-    const [user, setUser] = useState(null);
-    useEffect(() => {
+    const { user, logout } = useAuth();
 
-        const unsubscribe = onAuthStateChanged(
-            auth,
-            (currentUser) => {
-                setUser(currentUser);
-            }
-        );
-
-        return () => unsubscribe();
-
-    }, []);
     const handleLogout = async () => {
         try {
-            await signOut(auth);
+            await logout();
             toast.success("Logout Successful!");
         } catch (error) {
             console.log(error);

@@ -34,56 +34,37 @@ export default function TeacherDashboard() {
     useEffect(() => {
 
         const fetchStats = async () => {
+            try {
+                // Fetch student permissions (approved teachers are granted read access by firestore.rules)
+                const permissionsSnap = await getDocs(
+                    collection(db, "permissions")
+                );
 
-            // Students
-            const usersSnap = await getDocs(
-                collection(db, "users")
-            );
+                let shared = 0;
+                const allowedStudents = [];
 
-            let students = 0;
-
-            usersSnap.forEach((doc) => {
-                if (doc.data().role === "student") {
-                    students++;
-                }
-            });
-
-            setTotalStudents(students);
-
-            // Shared Reports
-            const permissionsSnap = await getDocs(
-                collection(db, "permissions")
-            );
-
-            let shared = 0;
-            const allowedStudents = [];
-
-            permissionsSnap.forEach((permissionDoc) => {
-
-                if (permissionDoc.data().teacherAccess) {
-
-                    shared++;
-
-                    const student = usersSnap.docs.find(
-                        (userDoc) =>
-                            userDoc.id === permissionDoc.id
-                    );
-
-                    if (
-                        student &&
-                        student.data().role === "student"
-                    ) {
-
-                        allowedStudents.push({
-                            id: student.id,
-                            ...student.data()
-                        });
+                // Fetch profiles strictly for students who granted explicit teacherAccess consent
+                for (const permissionDoc of permissionsSnap.docs) {
+                    if (permissionDoc.data().teacherAccess) {
+                        shared++;
+                        const studentDoc = await getDoc(
+                            doc(db, "users", permissionDoc.id)
+                        );
+                        if (
+                            studentDoc.exists() &&
+                            studentDoc.data().role === "student"
+                        ) {
+                            allowedStudents.push({
+                                id: studentDoc.id,
+                                ...studentDoc.data()
+                            });
+                        }
                     }
                 }
-            });
 
-            setSharedReports(shared);
-            setTeacherStudents(allowedStudents);
+                setTotalStudents(permissionsSnap.size || allowedStudents.length);
+                setSharedReports(shared);
+                setTeacherStudents(allowedStudents);
 
             // Activity Logs
             const logsSnap = await getDocs(
@@ -106,7 +87,11 @@ export default function TeacherDashboard() {
 
             setRecentLogs(logs);
             setActivityCount(logsSnap.size);
+        } catch (err) {
+            console.error("TeacherDashboard: Error loading stats:", err);
+        } finally {
             setLoading(false);
+        }
         };
 
         fetchStats();

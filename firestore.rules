@@ -1,0 +1,557 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId} (matches Firebase Auth UID)
+// Fields:
+//   - name: string (required, 1-100 chars)
+//   - email: string (required, valid email, matches auth.token.email)
+//   - role: string (required, 'student' | 'teacher' | 'parent' | 'superadmin')
+//   - approvalStatus: string (required, 'pending' | 'approved' | 'rejected')
+//   - accountStatus: string (required, 'active' | 'inactive' | 'suspended')
+//   - parentEmail: string (optional, 0-100 chars)
+//   - xp: number (optional, >= 0)
+//   - streak: number (optional, >= 0)
+//   - badges: number (optional, >= 0)
+//   - guardianPin: string (optional, 0-20 chars)
+//   - trustedDevices: list (optional, max 20 strings)
+//   - practiceVoiceCompleted: bool (optional)
+//   - practiceLetterCompleted: bool (optional)
+//   - practiceWordCompleted: bool (optional)
+//   - voiceScore: number (optional, >= 0)
+//   - letterScore: number (optional, >= 0)
+//   - wordScore: number (optional, >= 0)
+//   - createdAt: timestamp (immutable)
+//   - lastScore: number (optional, >= 0)
+//   - lastAccuracy: number (optional, 0-100)
+//   - lastRisk: string (optional, 0-50 chars)
+//   - lastMlRisk: number | bool | string (optional)
+//   - lastAssessmentDate: timestamp | string (optional)
+//   - lastLogin: timestamp (optional)
+//   - approvedAt: timestamp (optional, server/admin written)
+//   - approvedBy: string (optional, 0-128 chars)
+//   - rejectionReason: string (optional, 0-500 chars)
+//   - suspendedAt: timestamp (optional, server/admin written)
+//   - suspendedBy: string (optional, 0-128 chars)
+//   - suspensionReason: string (optional, 0-500 chars)
+//   - updatedAt: timestamp (optional)
+//   - migratedAt: timestamp (optional, migration script)
+//   - legacyUser: bool (optional, migration script)
+//
+// Collection: permissions
+// Document ID: {userId} (matches student Auth UID)
+// Fields:
+//   - teacherAccess: bool (required)
+//   - parentAccess: bool (required)
+//   - consentGiven: bool (required)
+//   - updatedAt: timestamp (optional)
+//
+// Collection: approvalRequests
+// Document ID: {userId} (matches Auth UID)
+// Fields:
+//   - userId: string (required, matches Auth UID)
+//   - name: string (required, 1-100 chars)
+//   - email: string (required, valid email)
+//   - requestedRole: string (required, 'student' | 'teacher' | 'parent')
+//   - parentEmail: string (optional, 0-100 chars)
+//   - status: string (required, 'pending' | 'approved' | 'rejected')
+//   - requestedAt: timestamp (required)
+//   - processedAt: timestamp (optional)
+//   - processedBy: string (optional, 0-128 chars)
+//   - processedByEmail: string (optional, 0-100 chars)
+//   - rejectionReason: string (optional, 0-500 chars)
+//
+// Collection: auditLogs
+// Document ID: auto-generated {logId}
+// Fields:
+//   - action: string (required, 1-100 chars)
+//   - adminId: string (required, 1-128 chars)
+//   - adminEmail: string (required, 1-100 chars)
+//   - targetUserId: string (required, 1-128 chars)
+//   - targetUserEmail: string (optional, 0-100 chars)
+//   - targetUserName: string (optional, 0-100 chars)
+//   - targetUserRole: string (optional, 0-50 chars)
+//   - previousApprovalStatus: string (optional)
+//   - newApprovalStatus: string (optional)
+//   - previousAccountStatus: string (optional)
+//   - newAccountStatus: string (optional)
+//   - reason: string (optional, 0-500 chars)
+//   - timestamp: timestamp (required)
+//
+// Collection: activityLogs
+// Document ID: auto-generated {logId}
+// Fields:
+//   - action: string (required, 1-500 chars)
+//   - timestamp: timestamp (required)
+//   - userId: string (optional, 1-128 chars)
+//
+// Collection: admin_config
+// Document ID: 'primary' (or singleton ID)
+// Fields:
+//   - uid: string
+//   - email: string
+//   - superadmin: bool
+//   - provisionedAt: timestamp
+//   - note: string
+//
+// Collection: assessments
+// Document ID: auto-generated {assessmentId}
+// Fields:
+//   - userId: string (required, 1-128 chars)
+//   - score: number (optional, >= 0)
+//   - accuracy: number (optional, 0-100)
+//   - risk: string (optional, 0-50 chars)
+//   - mlRisk: number | bool | string (optional)
+//   - completedAt: timestamp (optional)
+//   - answers: list | map (optional)
+//   - type: string (optional, 0-50 chars)
+//   - notes: string (optional, 0-500 chars)
+//   - createdAt: timestamp (optional)
+//
+// Collection: notifications
+// Document ID: auto-generated {notificationId}
+// Fields:
+//   - recipientId: string (required, 1-128 chars)
+//   - title: string (required, 1-200 chars)
+//   - message: string (required, 1-1000 chars)
+//   - read: bool (required)
+//   - type: string (optional, 0-50 chars)
+//   - createdAt: timestamp (required)
+//   - link: string (optional, 0-200 chars)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the request is from an authenticated user
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user has verified Super Admin custom claim
+    function isSuperAdmin() {
+      return isAuthenticated() &&
+             ('superadmin' in request.auth.token) &&
+             request.auth.token.superadmin == true;
+    }
+
+    // Check if user is the resource owner by UID
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Validate email format and length
+    function isValidEmail(email) {
+      return email is string &&
+             email.size() <= 100 &&
+             email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Safe retrieval of user data map from Firestore
+    function getUserDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    // Check if a user document exists
+    function userExists(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+
+    // Check if a user account is approved and not suspended
+    function isApprovedAndActiveUser(uid) {
+      return userExists(uid) &&
+             (
+               !('approvalStatus' in getUserDoc(uid)) ||
+               getUserDoc(uid).approvalStatus == 'approved'
+             ) &&
+             (
+               !('accountStatus' in getUserDoc(uid)) ||
+               getUserDoc(uid).accountStatus != 'suspended'
+             );
+    }
+
+    // Check if user document data is approved or legacy (non-suspended)
+    function isApprovedOrLegacyUserDoc(userData) {
+      return (
+               !('approvalStatus' in userData) ||
+               userData.approvalStatus == 'approved'
+             ) &&
+             (
+               !('accountStatus' in userData) ||
+               userData.accountStatus != 'suspended'
+             );
+    }
+
+    // Check if current authenticated user is an approved teacher
+    function isApprovedTeacher() {
+      return isAuthenticated() &&
+             isApprovedAndActiveUser(request.auth.uid) &&
+             getUserDoc(request.auth.uid).role == 'teacher';
+    }
+
+    // Check if current authenticated user is an approved parent
+    function isApprovedParent() {
+      return isAuthenticated() &&
+             isApprovedAndActiveUser(request.auth.uid) &&
+             getUserDoc(request.auth.uid).role == 'parent';
+    }
+
+    // Check if current authenticated user is an approved student
+    function isApprovedStudent() {
+      return isAuthenticated() &&
+             isApprovedAndActiveUser(request.auth.uid) &&
+             getUserDoc(request.auth.uid).role == 'student';
+    }
+
+    // Guard against users modifying role, approvalStatus, or accountStatus
+    function areUserStatusesUnchanged() {
+      return request.resource.data.role == resource.data.role &&
+             (
+               (!('approvalStatus' in resource.data) && !('approvalStatus' in request.resource.data)) ||
+               (('approvalStatus' in resource.data) && ('approvalStatus' in request.resource.data) && request.resource.data.approvalStatus == resource.data.approvalStatus)
+             ) &&
+             (
+               (!('accountStatus' in resource.data) && !('accountStatus' in request.resource.data)) ||
+               (('accountStatus' in resource.data) && ('accountStatus' in request.resource.data) && request.resource.data.accountStatus == resource.data.accountStatus)
+             );
+    }
+
+    // Guard against modifying immutable user fields
+    function areImmutableUserFieldsUnchanged() {
+      return request.resource.data.email == resource.data.email &&
+             (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
+    }
+
+    // ===============================================================
+    // Domain Validators (Applied on Create & Update)
+    // ===============================================================
+
+    // Validate complete user document structure
+    function isValidUser(data) {
+      return data.keys().hasOnly([
+               'name', 'email', 'role', 'approvalStatus', 'accountStatus', 'parentEmail',
+               'xp', 'streak', 'badges', 'guardianPin', 'trustedDevices',
+               'practiceVoiceCompleted', 'practiceLetterCompleted', 'practiceWordCompleted',
+               'voiceScore', 'letterScore', 'wordScore',
+               'createdAt', 'lastScore', 'lastAccuracy', 'lastRisk', 'lastMlRisk',
+               'lastAssessmentDate', 'lastLogin', 'approvedAt', 'approvedBy',
+               'rejectionReason', 'suspendedAt', 'suspendedBy', 'suspensionReason',
+               'updatedAt', 'migratedAt', 'legacyUser'
+             ]) &&
+             ('name' in data && data.name is string && data.name.size() > 0 && data.name.size() <= 100) &&
+             ('email' in data && isValidEmail(data.email)) &&
+             ('role' in data && data.role in ['student', 'teacher', 'parent', 'superadmin']) &&
+             (!('approvalStatus' in data) || data.approvalStatus in ['pending', 'approved', 'rejected']) &&
+             (!('accountStatus' in data) || data.accountStatus in ['active', 'inactive', 'suspended']) &&
+             (!('parentEmail' in data) || (data.parentEmail is string && data.parentEmail.size() <= 100)) &&
+             (!('xp' in data) || (data.xp is number && data.xp >= 0)) &&
+             (!('streak' in data) || (data.streak is number && data.streak >= 0)) &&
+             (!('badges' in data) || (data.badges is number && data.badges >= 0)) &&
+             (!('guardianPin' in data) || (data.guardianPin is string && data.guardianPin.size() <= 20)) &&
+             (!('trustedDevices' in data) || (data.trustedDevices is list && data.trustedDevices.size() <= 20)) &&
+             (!('practiceVoiceCompleted' in data) || data.practiceVoiceCompleted is bool) &&
+             (!('practiceLetterCompleted' in data) || data.practiceLetterCompleted is bool) &&
+             (!('practiceWordCompleted' in data) || data.practiceWordCompleted is bool) &&
+             (!('voiceScore' in data) || (data.voiceScore is number && data.voiceScore >= 0)) &&
+             (!('letterScore' in data) || (data.letterScore is number && data.letterScore >= 0)) &&
+             (!('wordScore' in data) || (data.wordScore is number && data.wordScore >= 0)) &&
+             (!('lastScore' in data) || (data.lastScore is number && data.lastScore >= 0)) &&
+             (!('lastAccuracy' in data) || (data.lastAccuracy is number && data.lastAccuracy >= 0 && data.lastAccuracy <= 100)) &&
+             (!('lastRisk' in data) || (data.lastRisk is string && data.lastRisk.size() <= 50)) &&
+             (!('lastMlRisk' in data) || (data.lastMlRisk is number || data.lastMlRisk is bool || (data.lastMlRisk is string && data.lastMlRisk.size() <= 50))) &&
+             (!('lastAssessmentDate' in data) || (data.lastAssessmentDate is string && data.lastAssessmentDate.size() <= 100) || data.lastAssessmentDate is timestamp) &&
+             (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128)) &&
+             (!('rejectionReason' in data) || (data.rejectionReason == null || (data.rejectionReason is string && data.rejectionReason.size() <= 500))) &&
+             (!('suspendedBy' in data) || (data.suspendedBy is string && data.suspendedBy.size() <= 128)) &&
+             (!('suspensionReason' in data) || (data.suspensionReason == null || (data.suspensionReason is string && data.suspensionReason.size() <= 500))) &&
+             (!('legacyUser' in data) || data.legacyUser is bool);
+    }
+
+    // Validate user creation on self-registration
+    function isValidUserCreate(data, userId) {
+      return isValidUser(data) &&
+             data.keys().hasAll(['name', 'email', 'role', 'approvalStatus', 'accountStatus', 'xp', 'streak', 'badges']) &&
+             data.role in ['student', 'teacher', 'parent'] &&
+             data.approvalStatus == 'pending' &&
+             data.accountStatus == 'active' &&
+             request.auth.token.email != null &&
+             data.email == request.auth.token.email;
+    }
+
+    // Validate student privacy permissions document
+    function isValidPermissions(data) {
+      return data.keys().hasOnly(['teacherAccess', 'parentAccess', 'consentGiven', 'updatedAt']) &&
+             data.keys().hasAll(['teacherAccess', 'parentAccess', 'consentGiven']) &&
+             data.teacherAccess is bool &&
+             data.parentAccess is bool &&
+             data.consentGiven is bool;
+    }
+
+    // Validate approval requests
+    function isValidApprovalRequest(data) {
+      return data.keys().hasOnly([
+               'userId', 'name', 'email', 'requestedRole', 'parentEmail',
+               'status', 'requestedAt', 'processedAt', 'processedBy',
+               'processedByEmail', 'rejectionReason'
+             ]) &&
+             ('userId' in data && data.userId is string && data.userId.size() <= 128) &&
+             ('name' in data && data.name is string && data.name.size() > 0 && data.name.size() <= 100) &&
+             ('email' in data && isValidEmail(data.email)) &&
+             ('requestedRole' in data && data.requestedRole in ['student', 'teacher', 'parent']) &&
+             (!('parentEmail' in data) || (data.parentEmail is string && data.parentEmail.size() <= 100)) &&
+             ('status' in data && data.status in ['pending', 'approved', 'rejected']) &&
+             (!('processedBy' in data) || (data.processedBy is string && data.processedBy.size() <= 128)) &&
+             (!('processedByEmail' in data) || (data.processedByEmail is string && data.processedByEmail.size() <= 100)) &&
+             (!('rejectionReason' in data) || (data.rejectionReason == null || (data.rejectionReason is string && data.rejectionReason.size() <= 500)));
+    }
+
+    // Validate administrative audit logs
+    function isValidAuditLog(data) {
+      return data.keys().hasOnly([
+               'action', 'adminId', 'adminEmail', 'targetUserId', 'targetUserEmail',
+               'targetUserName', 'targetUserRole', 'previousApprovalStatus',
+               'newApprovalStatus', 'previousAccountStatus', 'newAccountStatus',
+               'reason', 'timestamp'
+             ]) &&
+             ('action' in data && data.action is string && data.action.size() > 0 && data.action.size() <= 100) &&
+             ('adminId' in data && data.adminId is string && data.adminId.size() <= 128) &&
+             ('adminEmail' in data && data.adminEmail is string && data.adminEmail.size() <= 100) &&
+             ('targetUserId' in data && data.targetUserId is string && data.targetUserId.size() <= 128) &&
+             (!('targetUserEmail' in data) || (data.targetUserEmail is string && data.targetUserEmail.size() <= 100)) &&
+             (!('targetUserName' in data) || (data.targetUserName is string && data.targetUserName.size() <= 100)) &&
+             (!('targetUserRole' in data) || (data.targetUserRole is string && data.targetUserRole.size() <= 50)) &&
+             (!('reason' in data) || (data.reason == null || (data.reason is string && data.reason.size() <= 500)));
+    }
+
+    // Validate activity log entries
+    function isValidActivityLog(data) {
+      return data.keys().hasOnly(['action', 'timestamp', 'userId']) &&
+             ('action' in data && data.action is string && data.action.size() > 0 && data.action.size() <= 500) &&
+             (!('userId' in data) || (data.userId is string && data.userId.size() <= 128));
+    }
+
+    // Validate assessment records
+    function isValidAssessment(data) {
+      return data.keys().hasOnly([
+               'userId', 'score', 'accuracy', 'risk', 'mlRisk',
+               'completedAt', 'answers', 'type', 'notes', 'createdAt'
+             ]) &&
+             ('userId' in data && data.userId is string && data.userId.size() <= 128) &&
+             (!('score' in data) || (data.score is number && data.score >= 0)) &&
+             (!('accuracy' in data) || (data.accuracy is number && data.accuracy >= 0 && data.accuracy <= 100)) &&
+             (!('risk' in data) || (data.risk is string && data.risk.size() <= 50)) &&
+             (!('mlRisk' in data) || (data.mlRisk is number || data.mlRisk is bool || (data.mlRisk is string && data.mlRisk.size() <= 50))) &&
+             (!('type' in data) || (data.type is string && data.type.size() <= 50)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+             (!('answers' in data) || (data.answers is list || data.answers is map));
+    }
+
+    // Validate notification records
+    function isValidNotification(data) {
+      return data.keys().hasOnly([
+               'recipientId', 'title', 'message', 'read', 'type', 'createdAt', 'link'
+             ]) &&
+             ('recipientId' in data && data.recipientId is string && data.recipientId.size() <= 128) &&
+             ('title' in data && data.title is string && data.title.size() > 0 && data.title.size() <= 200) &&
+             ('message' in data && data.message is string && data.message.size() > 0 && data.message.size() <= 1000) &&
+             ('read' in data && data.read is bool) &&
+             (!('type' in data) || (data.type is string && data.type.size() <= 50)) &&
+             (!('link' in data) || (data.link is string && data.link.size() <= 200));
+    }
+
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. User Profiles
+    match /users/{userId} {
+      allow read: if isSuperAdmin() ||
+                     isOwner(userId) ||
+                     (
+                       isApprovedParent() &&
+                       resource.data.role == 'student' &&
+                       ('parentEmail' in resource.data) &&
+                       resource.data.parentEmail is string &&
+                       resource.data.parentEmail.size() > 0 &&
+                       request.auth.token.email != null &&
+                       (resource.data.parentEmail == request.auth.token.email || resource.data.parentEmail.lower() == request.auth.token.email.lower())
+                     ) ||
+                     (
+                       isApprovedTeacher() &&
+                       resource.data.role == 'student' &&
+                       exists(/databases/$(database)/documents/permissions/$(userId)) &&
+                       get(/databases/$(database)/documents/permissions/$(userId)).data.teacherAccess == true
+                     );
+
+      allow create: if (
+                      isSuperAdmin() && isValidUser(request.resource.data)
+                    ) || (
+                      isOwner(userId) && isValidUserCreate(request.resource.data, userId)
+                    );
+
+      allow update: if (
+                      isSuperAdmin() && isValidUser(request.resource.data)
+                    ) || (
+                      isOwner(userId) &&
+                      isApprovedOrLegacyUserDoc(resource.data) &&
+                      areUserStatusesUnchanged() &&
+                      areImmutableUserFieldsUnchanged() &&
+                      isValidUser(request.resource.data)
+                    );
+
+      allow delete: if false;
+    }
+
+    // 2. Student Privacy Permissions
+    match /permissions/{userId} {
+      allow read: if isSuperAdmin() ||
+                     isOwner(userId) ||
+                     isApprovedTeacher();
+
+      allow create: if isSuperAdmin() ||
+                       (isOwner(userId) && isValidPermissions(request.resource.data));
+
+      allow update: if isSuperAdmin() ||
+                       (isOwner(userId) && isValidPermissions(request.resource.data));
+
+      allow delete: if false;
+    }
+
+    // 3. User Approval Requests
+    match /approvalRequests/{userId} {
+      allow read: if isSuperAdmin() || isOwner(userId);
+
+      allow create: if isSuperAdmin() ||
+                       (
+                         isOwner(userId) &&
+                         request.resource.data.status == 'pending' &&
+                         request.resource.data.userId == userId &&
+                         request.auth.token.email != null &&
+                         request.resource.data.email == request.auth.token.email &&
+                         isValidApprovalRequest(request.resource.data)
+                       );
+
+      allow update: if isSuperAdmin() && isValidApprovalRequest(request.resource.data);
+
+      allow delete: if false;
+    }
+
+    // 4. Immutable Administrative Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create: if isSuperAdmin() && isValidAuditLog(request.resource.data);
+      allow update, delete: if false;
+    }
+
+    // 5. Activity Logs
+    match /activityLogs/{logId} {
+      allow read: if isSuperAdmin() ||
+                     isApprovedTeacher() ||
+                     (
+                       isAuthenticated() &&
+                       isApprovedAndActiveUser(request.auth.uid) &&
+                       ('userId' in resource.data && resource.data.userId == request.auth.uid)
+                     );
+
+      allow create: if isSuperAdmin() ||
+                       (
+                         isAuthenticated() &&
+                         isApprovedAndActiveUser(request.auth.uid) &&
+                         isValidActivityLog(request.resource.data) &&
+                         (
+                           ('userId' in request.resource.data && request.resource.data.userId == request.auth.uid) ||
+                           (isApprovedTeacher() && !('userId' in request.resource.data))
+                         )
+                       );
+
+      allow update, delete: if false;
+    }
+
+    // 6. Primary Admin Configuration Sentinel (Server-Managed Only)
+    match /admin_config/{docId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // 7. Student Assessment Records
+    match /assessments/{assessmentId} {
+      allow read: if isSuperAdmin() ||
+                     (isAuthenticated() && ('userId' in resource.data) && resource.data.userId == request.auth.uid) ||
+                     (
+                       isApprovedParent() &&
+                       ('userId' in resource.data) &&
+                       userExists(resource.data.userId) &&
+                       ('parentEmail' in getUserDoc(resource.data.userId)) &&
+                       getUserDoc(resource.data.userId).parentEmail is string &&
+                       getUserDoc(resource.data.userId).parentEmail.size() > 0 &&
+                       request.auth.token.email != null &&
+                       getUserDoc(resource.data.userId).parentEmail.lower() == request.auth.token.email.lower()
+                     ) ||
+                     (
+                       isApprovedTeacher() &&
+                       ('userId' in resource.data) &&
+                       exists(/databases/$(database)/documents/permissions/$(resource.data.userId)) &&
+                       get(/databases/$(database)/documents/permissions/$(resource.data.userId)).data.teacherAccess == true
+                     );
+
+      allow create: if (
+                      isSuperAdmin() && isValidAssessment(request.resource.data)
+                    ) || (
+                      isApprovedStudent() &&
+                      request.resource.data.userId == request.auth.uid &&
+                      isValidAssessment(request.resource.data)
+                    );
+
+      allow update: if (
+                      isSuperAdmin() && isValidAssessment(request.resource.data)
+                    ) || (
+                      isApprovedStudent() &&
+                      resource.data.userId == request.auth.uid &&
+                      request.resource.data.userId == resource.data.userId &&
+                      isValidAssessment(request.resource.data)
+                    );
+
+      allow delete: if false;
+    }
+
+    // 8. Notifications
+    match /notifications/{notificationId} {
+      allow read: if isSuperAdmin() ||
+                     (isAuthenticated() && ('recipientId' in resource.data) && resource.data.recipientId == request.auth.uid);
+
+      allow create: if (
+                      isSuperAdmin() && isValidNotification(request.resource.data)
+                    ) || (
+                      isAuthenticated() &&
+                      request.resource.data.recipientId == request.auth.uid &&
+                      isValidNotification(request.resource.data)
+                    );
+
+      allow update: if (
+                      isSuperAdmin() && isValidNotification(request.resource.data)
+                    ) || (
+                      isAuthenticated() &&
+                      resource.data.recipientId == request.auth.uid &&
+                      request.resource.data.recipientId == resource.data.recipientId &&
+                      isValidNotification(request.resource.data)
+                    );
+
+      allow delete: if isSuperAdmin() ||
+                       (isAuthenticated() && ('recipientId' in resource.data) && resource.data.recipientId == request.auth.uid);
+    }
+
+    // 9. Root Catch-all (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

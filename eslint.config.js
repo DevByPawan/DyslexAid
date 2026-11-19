@@ -17,5 +17,25 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ['server/**/*.{js,cjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.commonjs,
+      },
+    },
   },
 ])

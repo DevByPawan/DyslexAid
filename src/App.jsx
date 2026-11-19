@@ -13,6 +13,7 @@ import AIScreening from "./pages/AIScreening";
 import Footer from "./components/Footer";
 import Dashboard from "./pages/Dashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AdminRoute from "./components/AdminRoute";
 import Practice from "./pages/Practice";
 import Login from "./pages/Login";
 import Assessment from "./pages/Assessment";
@@ -24,6 +25,10 @@ import { Toaster } from "react-hot-toast";
 import GuardianPin from "./pages/GuardianPin";
 import TeacherDashboard from "./pages/TeacherDashboard";
 import ParentDashboard from "./pages/ParentDashboard";
+import SuperAdminDashboard from "./pages/SuperAdminDashboard";
+import PendingApproval from "./pages/PendingApproval";
+import AccountRejected from "./pages/AccountRejected";
+import AccountSuspended from "./pages/AccountSuspended";
 import ScreeningVoice from "./pages/ScreeningVoice";
 import ScreeningLetter from "./pages/ScreeningLetter";
 import ScreeningWord from "./pages/ScreeningWord";
@@ -85,30 +90,85 @@ export default function App() {
       </>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/pending-approval" element={<PendingApproval />} />
+        <Route path="/account-rejected" element={<AccountRejected />} />
+        <Route path="/account-suspended" element={<AccountSuspended />} />
+
+        {/* Student Protected Routes */}
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={["student"]}>
               <Dashboard />
             </ProtectedRoute>
           }
         />
-        <Route path="/practice" element={<Practice />} />
-        <Route path="/login" element={<Login />} />
         <Route
-          path="/teacher-dashboard"
-          element={<TeacherDashboard />}
+          path="/practice"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <Practice />
+            </ProtectedRoute>
+          }
         />
         <Route
-          path="/parent-dashboard"
-          element={<ParentDashboard />}
+          path="/assessment"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <Assessment />
+            </ProtectedRoute>
+          }
         />
-        <Route path="/signup" element={<Signup />} />
+        <Route
+          path="/letter-recognition"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <LetterRecognition />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/word-matching"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <WordMatching />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/screening-test"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <ScreeningTest />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ai-report"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <AIReport />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/guardian-pin"
-          element={<GuardianPin />}
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <GuardianPin />
+            </ProtectedRoute>
+          }
         />
-        <Route element={<ScreeningLayout />}>
+
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <ScreeningLayout />
+            </ProtectedRoute>
+          }
+        >
           <Route
             path="/ai-screening"
             element={<AIScreening />}
@@ -126,19 +186,37 @@ export default function App() {
             element={<ScreeningWord />}
           />
         </Route>
-        <Route path="/assessment" element={<Assessment />} />
 
+        {/* Teacher Protected Route */}
         <Route
-          path="/letter-recognition"
-          element={<LetterRecognition />}
+          path="/teacher-dashboard"
+          element={
+            <ProtectedRoute allowedRoles={["teacher"]}>
+              <TeacherDashboard />
+            </ProtectedRoute>
+          }
         />
-        <Route path="/ai-report" element={<AIReport />} />
-        <Route path="/screening-test" element={<ScreeningTest />} />
-        <Route
-          path="/word-matching"
-          element={<WordMatching />}
 
+        {/* Parent Protected Route */}
+        <Route
+          path="/parent-dashboard"
+          element={
+            <ProtectedRoute allowedRoles={["parent"]}>
+              <ParentDashboard />
+            </ProtectedRoute>
+          }
         />
+
+        {/* Super Admin Protected Route */}
+        <Route
+          path="/admin-dashboard"
+          element={
+            <AdminRoute>
+              <SuperAdminDashboard />
+            </AdminRoute>
+          }
+        />
+
         <Route path="*" element={<NotFound />} />
       </Routes>
     </div>

@@ -42,6 +42,48 @@ export default function Login() {
                 );
 
             const user = userCredential.user;
+
+            // 1. Verify if user is Super Admin via server-authoritative token claim
+            const tokenResult = await user.getIdTokenResult();
+            if (tokenResult.claims?.superadmin === true) {
+                toast.success("Welcome, Super Admin! 🛡️");
+                navigate("/admin-dashboard");
+                return;
+            }
+
+            // 2. Fetch user profile
+            const userDoc = await getDoc(doc(db, "users", user.uid));
+            if (!userDoc.exists()) {
+                toast.error("User profile not found. Please contact support.");
+                return;
+            }
+
+            const userData = userDoc.data();
+            const approvalStatus = userData.approvalStatus || null;
+            const accountStatus = userData.accountStatus || "active";
+
+            // 3. Handle suspended accounts (do NOT increment streak)
+            if (accountStatus === "suspended") {
+                toast.error("Your account has been suspended.");
+                navigate("/account-suspended");
+                return;
+            }
+
+            // 4. Handle rejected registrations (do NOT increment streak)
+            if (approvalStatus === "rejected") {
+                toast.error("Your registration was not approved.");
+                navigate("/account-rejected");
+                return;
+            }
+
+            // 5. Handle pending registrations (do NOT increment streak)
+            if (approvalStatus === "pending") {
+                toast("Your account is pending Super Admin approval.", { icon: "⏳" });
+                navigate("/pending-approval");
+                return;
+            }
+
+            // 6. Approved user (or migrated active user) – increment streak and proceed
             const deviceId =
                 navigator.userAgent +
                 navigator.language +
@@ -55,24 +97,10 @@ export default function Login() {
                 }
             );
 
-            const userDoc = await getDoc(
-                doc(db, "users", user.uid)
-            );
-
-            const userData = userDoc.data();
             if (userData.role === "student") {
-
-                const trustedDevices =
-                    userData.trustedDevices || [];
-
-                if (
-                    !trustedDevices.includes(deviceId)
-                ) {
-
-                    toast(
-                        "⚠️ New Device Detected"
-                    );
-
+                const trustedDevices = userData.trustedDevices || [];
+                if (!trustedDevices.includes(deviceId)) {
+                    toast("⚠️ New Device Detected");
                     await updateDoc(
                         doc(db, "users", user.uid),
                         {
@@ -84,21 +112,18 @@ export default function Login() {
                     );
                 }
             }
-            console.log("User Data:", userData);
-            console.log("Role:", userData?.role);
+
             toast.success("Login Successful!");
 
             if (userData.role === "teacher") {
                 navigate("/teacher-dashboard");
-            }
-            else if (userData.role === "parent") {
+            } else if (userData.role === "parent") {
                 navigate("/parent-dashboard");
-            }
-            else {
+            } else {
                 navigate("/dashboard");
             }
 
-        } catch (error) {
+        } catch {
             toast.error("Invalid email or password");
         }
     };

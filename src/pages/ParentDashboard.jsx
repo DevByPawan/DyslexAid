@@ -6,10 +6,10 @@ import {
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import {
-    doc,
-    getDoc,
     collection,
-    getDocs
+    getDocs,
+    query,
+    where
 } from "firebase/firestore";
 import { generateReportPDF } from "../utils/generateReportPDF";
 import toast from "react-hot-toast";
@@ -38,23 +38,18 @@ export default function ParentDashboard() {
                 return;
             }
 
-            const usersSnap = await getDocs(
-                collection(db, "users")
+            const studentQuery = query(
+                collection(db, "users"),
+                where("parentEmail", "==", currentUser.email),
+                where("role", "==", "student")
             );
+
+            const usersSnap = await getDocs(studentQuery);
 
             let linkedStudent = null;
 
             usersSnap.forEach((doc) => {
-
-                const data = doc.data();
-
-                if (
-                    data.role === "student" &&
-                    data.parentEmail === currentUser.email
-                ) {
-                    linkedStudent = data;
-                }
-
+                linkedStudent = doc.data();
             });
 
             if (linkedStudent) {
