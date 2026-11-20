@@ -13,12 +13,15 @@ import {
 } from "firebase/firestore";
 import { generateReportPDF } from "../utils/generateReportPDF";
 import toast from "react-hot-toast";
+import StudentAssessmentHistory from "../components/student/StudentAssessmentHistory";
 
 export default function ParentDashboard() {
 
     const navigate = useNavigate();
 
     const [userData, setUserData] = useState(null);
+    const [linkedStudents, setLinkedStudents] = useState([]);
+    const [selectedChild, setSelectedChild] = useState(null);
     const [showReport, setShowReport] = useState(false);
     const [showPinModal, setShowPinModal] = useState(false);
     const [enteredPin, setEnteredPin] = useState("");
@@ -46,14 +49,17 @@ export default function ParentDashboard() {
 
             const usersSnap = await getDocs(studentQuery);
 
-            let linkedStudent = null;
+            const students = [];
 
             usersSnap.forEach((doc) => {
-                linkedStudent = doc.data();
+                students.push({ id: doc.id, ...doc.data() });
             });
 
-            if (linkedStudent) {
-                setUserData(linkedStudent);
+            setLinkedStudents(students);
+
+            if (students.length > 0) {
+                setUserData(students[0]);
+                setSelectedChild(students[0]);
             }
 
             setLoading(false);
@@ -164,6 +170,30 @@ export default function ParentDashboard() {
                 </p>
 
             </div>
+
+            {linkedStudents.length > 1 && (
+                <div className="flex items-center gap-3 mb-6 p-4 rounded-2xl bg-white/5 border border-white/10">
+                    <span className="text-sm font-semibold text-slate-300">Select Child:</span>
+                    <div className="flex flex-wrap gap-2">
+                        {linkedStudents.map((child) => (
+                            <button
+                                key={child.id}
+                                onClick={() => {
+                                    setSelectedChild(child);
+                                    setUserData(child);
+                                }}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                                    (selectedChild?.id || userData?.id) === child.id
+                                        ? "bg-gradient-to-r from-cyan-400 to-pink-400 text-black shadow-lg"
+                                        : "bg-white/10 text-white hover:bg-white/20"
+                                }`}
+                            >
+                                {child.name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6">
 
@@ -364,6 +394,24 @@ export default function ParentDashboard() {
                 >
                     📄 View Child Report
                 </button>
+            </div>
+
+            {/* Child Historical Assessment & Learning Progress */}
+            <div className="mt-8">
+                {selectedChild || userData?.id ? (
+                    <StudentAssessmentHistory
+                        userId={selectedChild?.id || userData?.id}
+                        viewerRole="parent"
+                        studentName={selectedChild?.name || userData?.name}
+                    />
+                ) : (
+                    <div className="backdrop-blur-2xl bg-white/10 border border-white/10 rounded-3xl p-8 text-center space-y-3">
+                        <p className="text-gray-400 text-sm">
+                            No linked student accounts found for your parent email.
+                            When a student registers with your email as their parent contact, their full historical progress and assessment records will appear here.
+                        </p>
+                    </div>
+                )}
             </div>
             {showPinModal && (
 

@@ -101,15 +101,17 @@ rules_version = '2';
 // Document ID: auto-generated {assessmentId}
 // Fields:
 //   - userId: string (required, 1-128 chars)
-//   - score: number (optional, >= 0)
+//   - score: number (optional, 0-100)
 //   - accuracy: number (optional, 0-100)
-//   - risk: string (optional, 0-50 chars)
+//   - risk: string (optional, 'Low Risk' | 'Moderate Risk' | 'High Risk' | 'Unknown' or string <= 50 chars)
 //   - mlRisk: number | bool | string (optional)
 //   - completedAt: timestamp (optional)
 //   - answers: list | map (optional)
 //   - type: string (optional, 0-50 chars)
 //   - notes: string (optional, 0-500 chars)
 //   - createdAt: timestamp (optional)
+//   - subScores: map (optional)
+//   - insights: map (optional)
 //
 // Collection: notifications
 // Document ID: auto-generated {notificationId}
@@ -342,16 +344,21 @@ service cloud.firestore {
     function isValidAssessment(data) {
       return data.keys().hasOnly([
                'userId', 'score', 'accuracy', 'risk', 'mlRisk',
-               'completedAt', 'answers', 'type', 'notes', 'createdAt'
+               'completedAt', 'answers', 'type', 'notes', 'createdAt',
+               'subScores', 'insights'
              ]) &&
              ('userId' in data && data.userId is string && data.userId.size() <= 128) &&
-             (!('score' in data) || (data.score is number && data.score >= 0)) &&
+             (!('score' in data) || (data.score is number && data.score >= 0 && data.score <= 100)) &&
              (!('accuracy' in data) || (data.accuracy is number && data.accuracy >= 0 && data.accuracy <= 100)) &&
-             (!('risk' in data) || (data.risk is string && data.risk.size() <= 50)) &&
-             (!('mlRisk' in data) || (data.mlRisk is number || data.mlRisk is bool || (data.mlRisk is string && data.mlRisk.size() <= 50))) &&
+             (!('risk' in data) || (data.risk is string && (data.risk in ['Low Risk', 'Moderate Risk', 'High Risk', 'Unknown'] || data.risk.size() <= 50))) &&
+             (!('mlRisk' in data) || (data.mlRisk is number || data.mlRisk is bool || (data.mlRisk is string && (data.mlRisk in ['Low Risk', 'Moderate Risk', 'High Risk', 'Unknown'] || data.mlRisk.size() <= 50)))) &&
              (!('type' in data) || (data.type is string && data.type.size() <= 50)) &&
              (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
-             (!('answers' in data) || (data.answers is list || data.answers is map));
+             (!('answers' in data) || (data.answers is list || data.answers is map)) &&
+             (!('subScores' in data) || data.subScores is map) &&
+             (!('insights' in data) || data.insights is map) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('completedAt' in data) || data.completedAt is timestamp);
     }
 
     // Validate notification records
@@ -511,14 +518,7 @@ service cloud.firestore {
                       isValidAssessment(request.resource.data)
                     );
 
-      allow update: if (
-                      isSuperAdmin() && isValidAssessment(request.resource.data)
-                    ) || (
-                      isApprovedStudent() &&
-                      resource.data.userId == request.auth.uid &&
-                      request.resource.data.userId == resource.data.userId &&
-                      isValidAssessment(request.resource.data)
-                    );
+      allow update: if false;
 
       allow delete: if false;
     }

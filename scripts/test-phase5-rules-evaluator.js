@@ -166,6 +166,80 @@ test("Suspended user attempting to self-reactivate accountStatus: 'suspended' ->
     assert.strictEqual(evaluateProfileUpdate(auth, "std-1", before, after), false);
 });
 
+// Phase 6.1 Assessment Rules Verification
+test("assessments collection strictly enforces immutability and deletion restrictions", () => {
+    assert(rulesContent.includes("match /assessments/{assessmentId}"), "assessments collection block exists");
+    const assessmentBlock = rulesContent.substring(rulesContent.indexOf("match /assessments/{assessmentId}"));
+    assert(assessmentBlock.includes("allow update: if false;"), "Historical assessments cannot be updated (immutability)");
+    assert(assessmentBlock.includes("allow delete: if false;"), "Historical assessments cannot be deleted");
+});
+
+test("isValidAssessment validates keys including subScores and insights and restricts score/accuracy bounds", () => {
+    assert(rulesContent.includes("'subScores', 'insights'"), "subScores and insights keys whitelisted in isValidAssessment");
+    assert(rulesContent.includes("data.score >= 0 && data.score <= 100"), "score bounded between 0 and 100");
+    assert(rulesContent.includes("data.accuracy >= 0 && data.accuracy <= 100"), "accuracy bounded between 0 and 100");
+    assert(rulesContent.includes("data.subScores is map"), "subScores validated as map");
+    assert(rulesContent.includes("data.insights is map"), "insights validated as map");
+    assert(rulesContent.includes("data.completedAt is timestamp"), "completedAt validated as timestamp");
+});
+
+function evaluateAssessmentCreate(auth, userDoc, assessmentData) {
+    if (!auth) return false;
+    // SuperAdmin create
+    if (auth.token?.superadmin === true) {
+        return isValidAssessmentMock(assessmentData);
+    }
+    // Student create
+    const isApprovedStudent = userDoc && userDoc.role === "student" && userDoc.approvalStatus === "approved" && userDoc.accountStatus !== "suspended";
+    if (isApprovedStudent && assessmentData.userId === auth.uid) {
+        return isValidAssessmentMock(assessmentData);
+    }
+    return false;
+}
+
+function isValidAssessmentMock(data) {
+    const allowed = new Set([
+        "userId", "score", "accuracy", "risk", "mlRisk",
+        "completedAt", "answers", "type", "notes", "createdAt",
+        "subScores", "insights"
+    ]);
+    for (const k of Object.keys(data)) {
+        if (!allowed.has(k)) return false;
+    }
+    if (!data.userId || typeof data.userId !== "string" || data.userId.length > 128) return false;
+    if ("score" in data && (typeof data.score !== "number" || data.score < 0 || data.score > 100)) return false;
+    if ("accuracy" in data && (typeof data.accuracy !== "number" || data.accuracy < 0 || data.accuracy > 100)) return false;
+    if ("risk" in data && (typeof data.risk !== "string" || data.risk.length > 50)) return false;
+    if ("subScores" in data && (typeof data.subScores !== "object" || data.subScores === null || Array.isArray(data.subScores))) return false;
+    if ("insights" in data && (typeof data.insights !== "object" || data.insights === null || Array.isArray(data.insights))) return false;
+    return true;
+}
+
+test("Approved student creating valid assessment for own UID -> ALLOW", () => {
+    const auth = { uid: "std-1" };
+    const userDoc = { role: "student", approvalStatus: "approved", accountStatus: "active" };
+    const validAssessment = {
+        userId: "std-1",
+        score: 85,
+        accuracy: 90,
+        risk: "Low Risk",
+        subScores: { voice: 80, letter: 90 },
+        insights: { note: "Great performance" }
+    };
+    assert.strictEqual(evaluateAssessmentCreate(auth, userDoc, validAssessment), true);
+});
+
+test("Student creating assessment with invalid/tampered fields or foreign UID -> DENY", () => {
+    const auth = { uid: "std-1" };
+    const userDoc = { role: "student", approvalStatus: "approved", accountStatus: "active" };
+    // Foreign UID
+    assert.strictEqual(evaluateAssessmentCreate(auth, userDoc, { userId: "std-2", score: 85 }), false);
+    // Score > 100
+    assert.strictEqual(evaluateAssessmentCreate(auth, userDoc, { userId: "std-1", score: 150 }), false);
+    // Unwhitelisted key
+    assert.strictEqual(evaluateAssessmentCreate(auth, userDoc, { userId: "std-1", score: 80, injectedField: true }), false);
+});
+
 console.log("\n=======================================================================");
 console.log(`  Security Rules Evaluation Completed: ${passed} passed, ${failed} failed`);
 console.log("=======================================================================\n");

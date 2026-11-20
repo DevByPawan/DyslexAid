@@ -46,6 +46,7 @@ export default function AIScreening() {
 const handleStartOver = () => {
 
     localStorage.removeItem("assessmentProgress");
+    localStorage.removeItem("currentAssessmentId");
 
     setShowResume(false);
 

@@ -120,6 +120,13 @@ if (progress) {
                 ) / 3
             );
 
+            const assessmentId =
+                progress?.assessmentId ||
+                localStorage.getItem("currentAssessmentId") ||
+                `asmt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+            localStorage.setItem("currentAssessmentId", assessmentId);
+
             toast.success(
                 "Screening Completed 🎉"
             );
@@ -127,7 +134,8 @@ if (progress) {
             navigate("/ai-report", {
                 state: {
                     score: finalPredictionScore,
-                    total: 100
+                    total: 100,
+                    assessmentId
                 }
             });
         }

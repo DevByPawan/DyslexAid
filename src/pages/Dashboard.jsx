@@ -1,5 +1,5 @@
 import { auth, db } from "../firebase";
-import { signOut } from "firebase/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
@@ -13,11 +13,11 @@ import {
     serverTimestamp
 } from "firebase/firestore";
 import toast from "react-hot-toast";
-
+import StudentAssessmentHistory from "../components/student/StudentAssessmentHistory";
 
 export default function Dashboard() {
     const navigate = useNavigate();
-    const user = auth.currentUser;
+    const [currentUser, setCurrentUser] = useState(auth.currentUser);
     const [userData, setUserData] = useState(null);
     const [permissions, setPermissions] = useState(null);
     const [dailyGoal, setDailyGoal] = useState(0);
@@ -26,117 +26,103 @@ export default function Dashboard() {
         await signOut(auth);
         navigate("/");
     };
+
     useEffect(() => {
-        const fetchUserData = async () => {
+        const fetchUserData = async (activeUser) => {
+            if (!activeUser) return;
 
-            const user = auth.currentUser;
+            try {
+                const docRef = doc(db, "users", activeUser.uid);
+                const docSnap = await getDoc(docRef);
 
-            if (!user) return;
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    setUserData(data);
 
-            const docRef = doc(db, "users", user.uid);
+                    let completed = 0;
+                    if (data.practiceVoiceCompleted) completed++;
+                    if (data.practiceLetterCompleted) completed++;
+                    if (data.practiceWordCompleted) completed++;
 
-            const docSnap = await getDoc(docRef);
+                    setDailyGoal(
+                        Math.round((completed / 3) * 100)
+                    );
+                }
 
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-
-                setUserData(data);
-
-                let completed = 0;
-
-                if (data.practiceVoiceCompleted)
-                    completed++;
-
-                if (data.practiceLetterCompleted)
-                    completed++;
-
-                if (data.practiceWordCompleted)
-                    completed++;
-
-                setDailyGoal(
-                    Math.round((completed / 3) * 100)
+                const permissionRef = doc(
+                    db,
+                    "permissions",
+                    activeUser.uid
                 );
 
-            }
-            const permissionRef = doc(
-                db,
-                "permissions",
-                user.uid
-            );
+                const permissionSnap = await getDoc(permissionRef);
 
-            const permissionSnap =
-                await getDoc(permissionRef);
+                if (permissionSnap.exists()) {
+                    setPermissions(permissionSnap.data());
+                } else {
+                    await setDoc(permissionRef, {
+                        parentAccess: true,
+                        teacherAccess: false,
+                        consentGiven: false,
+                    });
 
-            if (permissionSnap.exists()) {
-
-                setPermissions(
-                    permissionSnap.data()
-                );
-
-            } else {
-
-                await setDoc(permissionRef, {
-                    parentAccess: true,
-                    teacherAccess: false,
-                    consentGiven: false,
-                });
-
-                setPermissions({
-                    parentAccess: true,
-                    teacherAccess: false,
-                    consentGiven: false,
-                });
+                    setPermissions({
+                        parentAccess: true,
+                        teacherAccess: false,
+                        consentGiven: false,
+                    });
+                }
+            } catch (err) {
+                console.error("Error loading dashboard data:", err);
             }
         };
 
-        fetchUserData();
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+            setCurrentUser(user);
+            if (user) {
+                fetchUserData(user);
+            }
+        });
+
+        return () => unsubscribe();
     }, []);
 
     const addLog = async (action) => {
-
+        if (!currentUser) return;
         try {
-
             await addDoc(
                 collection(db, "activityLogs"),
                 {
-                    userId: auth.currentUser.uid,
+                    userId: currentUser.uid,
                     action,
                     timestamp: serverTimestamp(),
                 }
             );
-
         } catch (error) {
             console.log(error);
         }
     };
-    const updatePermission = async (
-        field,
-        value
-    ) => {
-        try {
 
+    const updatePermission = async (field, value) => {
+        if (!currentUser) return;
+        try {
             await updateDoc(
                 doc(
                     db,
                     "permissions",
-                    auth.currentUser.uid
+                    currentUser.uid
                 ),
                 {
                     [field]: value
                 }
             );
 
-            setPermissions({
-                ...permissions,
+            setPermissions((prev) => ({
+                ...prev,
                 [field]: value
-            });
-            await addLog(
-                `${field} changed to ${value}`
-            );
-            toast.success(
-                "Permission Updated"
-            );
-
+            }));
+            await addLog(`${field} changed to ${value}`);
+            toast.success("Permission Updated");
         } catch (error) {
             console.log(error);
             toast.error(error.message);
@@ -164,7 +150,7 @@ export default function Dashboard() {
                         </h1>
 
                         <p className="text-cyan-300 text-lg mb-2">
-                            {user?.email}
+                            {currentUser?.email}
                         </p>
 
                         <p className="text-gray-300 text-lg">
@@ -317,6 +303,12 @@ export default function Dashboard() {
                     </div>
 
                 </div>
+
+                {/* Student Historical Assessment & Progress Analytics */}
+                <div className="mt-8">
+                    <StudentAssessmentHistory userId={currentUser?.uid} />
+                </div>
+
                 <div className="backdrop-blur-2xl bg-white/10 border border-white/10 rounded-3xl p-8 mt-8">
 
                     <h2 className="text-2xl font-bold mb-6">

@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { auth, db } from "../firebase";
 import {
     doc,
     updateDoc,
-    getDoc
+    getDoc,
+    runTransaction,
+    serverTimestamp
 } from "firebase/firestore";
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import jsPDF from "jspdf";
 import { generateReportPDF } from "../utils/generateReportPDF";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -21,8 +22,18 @@ export default function AIReport() {
     const [confirmPin, setConfirmPin] = useState("");
     const [mlRisk, setMlRisk] = useState("Loading...");
 
-    const score = location.state?.score || 0;
-    const total = location.state?.total || 10;
+    const score = Number(location.state?.score) || 0;
+    const total = Number(location.state?.total) || 10;
+
+    const rawAssessmentId = location.state?.assessmentId || localStorage.getItem("currentAssessmentId");
+    const [assessmentId] = useState(() => {
+        if (rawAssessmentId && typeof rawAssessmentId === "string" && rawAssessmentId.trim().length > 0) {
+            return rawAssessmentId.trim();
+        }
+        const generated = `asmt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        localStorage.setItem("currentAssessmentId", generated);
+        return generated;
+    });
 
     const voiceScore =
         Number(localStorage.getItem("voiceScore")) || 0;
@@ -57,68 +68,63 @@ export default function AIReport() {
     };
 
 
-    const strengths = [];
-    const improvements = [];
-    let analysis = "";
+    const { strengths, improvements, analysis } = useMemo(() => {
+        const str = [];
+        const imp = [];
+        let ana;
 
-    if (
-        voiceScore >= 70 &&
-        letterScore >= 5 &&
-        wordScore >= 5
-    ) {
+        if (
+            voiceScore >= 70 &&
+            letterScore >= 5 &&
+            wordScore >= 5
+        ) {
+            ana =
+                "The screening indicates strong reading fluency, accurate letter recognition, and good word identification skills. Overall dyslexia risk appears low.";
+        }
+        else if (
+            voiceScore < 70 &&
+            letterScore >= 5 &&
+            wordScore >= 5
+        ) {
+            ana =
+                "Reading fluency challenges were observed during the voice assessment. Letter and word recognition remain strong.";
+        }
+        else if (
+            letterScore < 5 &&
+            wordScore >= 5
+        ) {
+            ana =
+                "Letter confusion patterns were detected. Additional letter recognition practice may be beneficial.";
+        }
+        else if (
+            wordScore < 5 &&
+            letterScore >= 5
+        ) {
+            ana =
+                "Word recognition difficulties were observed. Regular spelling and reading exercises are recommended.";
+        }
+        else {
+            ana =
+                "Multiple screening indicators suggest reading and recognition difficulties. Structured support and continued monitoring are recommended.";
+        }
 
-        analysis =
-            "The screening indicates strong reading fluency, accurate letter recognition, and good word identification skills. Overall dyslexia risk appears low.";
+        if (voiceScore >= 70)
+            str.push("Reading Fluency");
+        else
+            imp.push("Reading Fluency");
 
-    }
-    else if (
-        voiceScore < 70 &&
-        letterScore >= 5 &&
-        wordScore >= 5
-    ) {
+        if (letterScore >= 5)
+            str.push("Letter Recognition");
+        else
+            imp.push("Letter Recognition");
 
-        analysis =
-            "Reading fluency challenges were observed during the voice assessment. Letter and word recognition remain strong.";
+        if (wordScore >= 5)
+            str.push("Word Recognition");
+        else
+            imp.push("Word Recognition");
 
-    }
-    else if (
-        letterScore < 5 &&
-        wordScore >= 5
-    ) {
-
-        analysis =
-            "Letter confusion patterns were detected. Additional letter recognition practice may be beneficial.";
-
-    }
-    else if (
-        wordScore < 5 &&
-        letterScore >= 5
-    ) {
-
-        analysis =
-            "Word recognition difficulties were observed. Regular spelling and reading exercises are recommended.";
-
-    }
-    else {
-
-        analysis =
-            "Multiple screening indicators suggest reading and recognition difficulties. Structured support and continued monitoring are recommended.";
-    }
-
-    if (voiceScore >= 70)
-        strengths.push("Reading Fluency");
-    else
-        improvements.push("Reading Fluency");
-
-    if (letterScore >= 5)
-        strengths.push("Letter Recognition");
-    else
-        improvements.push("Letter Recognition");
-
-    if (wordScore >= 5)
-        strengths.push("Word Recognition");
-    else
-        improvements.push("Word Recognition");
+        return { strengths: str, improvements: imp, analysis: ana };
+    }, [voiceScore, letterScore, wordScore]);
 
     const percentage = Math.round((score / total) * 100);
     const confidence = Math.min(
@@ -126,9 +132,9 @@ export default function AIReport() {
         Math.max(60, percentage + 10)
     );
 
-    let risk = "";
-    let color = "";
-    let recommendation = "";
+    let risk;
+    let color;
+    let recommendation;
 
     if (percentage >= 80) {
         risk = "Low Risk";
@@ -146,27 +152,39 @@ export default function AIReport() {
         recommendation =
             "Additional support and structured dyslexia-focused practice may be beneficial.";
     }
-    useEffect(() => {
-        onAuthStateChanged(auth, async (user) => {
 
+    const persistedRef = useRef(false);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
             if (!user) {
                 navigate("/login");
                 return;
             }
 
-            const userSnap = await getDoc(
-                doc(db, "users", user.uid)
-            );
-
-            if (userSnap.exists()) {
-                setUserData(userSnap.data());
+            try {
+                const userSnap = await getDoc(
+                    doc(db, "users", user.uid)
+                );
+                if (userSnap.exists()) {
+                    setUserData(userSnap.data());
+                }
+            } catch (err) {
+                console.error("Failed to load user profile:", err);
             }
 
-        });
-        const getPrediction = async () => {
+            // Cross-refresh and in-memory idempotency check
+            const persistenceFlagKey = `asmt_persisted_${assessmentId}`;
+            if (persistedRef.current || localStorage.getItem(persistenceFlagKey) === "true") {
+                console.log("Assessment already submitted in this session:", assessmentId);
+                return;
+            }
 
+            persistedRef.current = true;
+
+            // 1. Fetch Flask ML prediction first
+            let finalMlRisk = risk;
             try {
-
                 const response = await fetch(
                     "https://dyslexaid-backend.onrender.com/predict",
                     {
@@ -182,72 +200,88 @@ export default function AIReport() {
                     }
                 );
 
-                const data = await response.json();
-
-                setMlRisk(data.risk);
-                const user = auth.currentUser;
-
-                if (user) {
-
-                    await updateDoc(
-                        doc(db, "users", user.uid),
-                        {
-                            lastRisk: data.risk,
-                            lastMlRisk: data.risk
-                        }
-                    );
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.risk) {
+                        finalMlRisk = data.risk;
+                    }
                 }
-
             } catch (error) {
-
-                console.error(error);
-
-                setMlRisk("Prediction Failed");
+                console.warn("ML prediction service unavailable, falling back to rule-based risk:", error);
             }
-        };
 
-        const saveReport = async () => {
+            setMlRisk(finalMlRisk);
 
-            const user = auth.currentUser;
-
-            if (!user) {
-                console.log("User not loaded yet");
-                return;
-            }
-            const userSnap = await getDoc(
-                doc(db, "users", user.uid)
-            );
-
-            if (userSnap.exists()) {
-                setUserData(userSnap.data());
-            }
+            // 2. Perform Atomic Firestore Transaction
+            const assessmentRef = doc(db, "assessments", assessmentId);
+            const userRef = doc(db, "users", user.uid);
 
             try {
+                await runTransaction(db, async (transaction) => {
+                    const [assessmentSnap, userDocSnap] = await Promise.all([
+                        transaction.get(assessmentRef),
+                        transaction.get(userRef)
+                    ]);
 
-                await updateDoc(
-                    doc(db, "users", user.uid),
-                    {
+                    // Idempotency check: if assessment document already exists, DO NOT OVERWRITE
+                    if (assessmentSnap.exists()) {
+                        console.log("Historical assessment document already exists:", assessmentId);
+                        return;
+                    }
+
+                    const assessmentData = {
+                        userId: user.uid,
+                        type: "comprehensive_screening",
+                        score: Math.min(100, Math.max(0, score)),
+                        accuracy: Math.min(100, Math.max(0, percentage)),
+                        risk: risk,
+                        mlRisk: finalMlRisk,
+                        subScores: {
+                            voiceAccuracy: voiceScore,
+                            letterScore: letterScore,
+                            wordScore: wordScore
+                        },
+                        insights: {
+                            strengths: strengths,
+                            improvements: improvements
+                        },
+                        answers: {
+                            voiceAccuracy: voiceScore,
+                            letterScore: letterScore,
+                            wordScore: wordScore
+                        },
+                        completedAt: serverTimestamp(),
+                        createdAt: serverTimestamp()
+                    };
+
+                    const latestSummaryUpdate = {
                         lastScore: score,
                         lastAccuracy: percentage,
+                        voiceScore: voiceScore,
+                        letterScore: letterScore,
+                        wordScore: wordScore,
+                        lastRisk: risk,
+                        lastMlRisk: finalMlRisk,
+                        lastAssessmentDate: new Date().toISOString()
+                    };
 
+                    transaction.set(assessmentRef, assessmentData);
 
-                        voiceScore,
-                        letterScore,
-                        wordScore,
-
-                        lastAssessmentDate:
-                            new Date().toISOString()
+                    if (userDocSnap.exists()) {
+                        transaction.update(userRef, latestSummaryUpdate);
                     }
-                );
+                });
 
-            } catch (error) {
-                console.error("Error saving report:", error);
+                localStorage.setItem(persistenceFlagKey, "true");
+            } catch (saveError) {
+                console.error("Atomic assessment persistence failed:", saveError);
+                persistedRef.current = false;
+                toast.error("Failed to save assessment to history.");
             }
-        };
+        });
 
-        saveReport();
-        getPrediction();
-    }, []);
+        return () => unsubscribe();
+    }, [assessmentId, navigate, percentage, risk, score, strengths, improvements, voiceScore, letterScore, wordScore]);
     const verifyPin = () => {
 
         if (!userData?.guardianPin) {
@@ -315,7 +349,7 @@ export default function AIReport() {
                 "Guardian PIN Created"
             );
 
-        } catch (error) {
+        } catch {
 
             toast.error(
                 "Failed to save PIN"

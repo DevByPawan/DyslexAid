@@ -1201,5 +1201,453 @@ router.post("/system/incidents", (req, res) => {
     }
 });
 
+// ── Historical Assessment Query Helper ─────────────────────────────────────────
+function sanitizeAssessmentRecord(id, data) {
+    return {
+        id,
+        userId: data.userId || "",
+        type: data.type || "comprehensive_screening",
+        score: typeof data.score === "number" ? data.score : 0,
+        accuracy: typeof data.accuracy === "number" ? data.accuracy : 0,
+        risk: data.risk || "Unknown",
+        mlRisk: data.mlRisk || "Unknown",
+        subScores: {
+            voiceAccuracy: typeof data.subScores?.voiceAccuracy === "number" ? data.subScores.voiceAccuracy : 0,
+            letterScore: typeof data.subScores?.letterScore === "number" ? data.subScores.letterScore : 0,
+            wordScore: typeof data.subScores?.wordScore === "number" ? data.subScores.wordScore : 0,
+        },
+        insights: {
+            strengths: Array.isArray(data.insights?.strengths) ? data.insights.strengths : [],
+            improvements: Array.isArray(data.insights?.improvements) ? data.insights.improvements : [],
+        },
+        answers: {
+            voiceAccuracy: typeof data.answers?.voiceAccuracy === "number" ? data.answers.voiceAccuracy : (typeof data.subScores?.voiceAccuracy === "number" ? data.subScores.voiceAccuracy : 0),
+            letterScore: typeof data.answers?.letterScore === "number" ? data.answers.letterScore : (typeof data.subScores?.letterScore === "number" ? data.subScores.letterScore : 0),
+            wordScore: typeof data.answers?.wordScore === "number" ? data.answers.wordScore : (typeof data.subScores?.wordScore === "number" ? data.subScores.wordScore : 0),
+        },
+        completedAt: parseTimestampMillis(data.completedAt),
+        createdAt: parseTimestampMillis(data.createdAt),
+    };
+}
+
+async function handleHistoricalAssessmentQuery(req, res, targetUserId = null) {
+    try {
+        const userId = targetUserId || (req.query.userId ? String(req.query.userId).trim() : null);
+        if (userId && !/^[a-zA-Z0-9_-]{1,128}$/.test(userId)) {
+            return res.status(400).json({ error: "Invalid userId parameter: must be a valid alphanumeric identifier." });
+        }
+
+        const validRisks = ["all", "Low Risk", "Moderate Risk", "High Risk", "Unknown"];
+        const risk = req.query.risk || "all";
+        if (!validRisks.includes(risk)) {
+            return res.status(400).json({ error: "Invalid risk filter. Allowed values: all, Low Risk, Moderate Risk, High Risk, Unknown." });
+        }
+
+        const rawLimit = req.query.limit;
+        let limit = rawLimit !== undefined ? parseInt(rawLimit, 10) : 10;
+        if (isNaN(limit) || limit < 1) {
+            return res.status(400).json({ error: "Invalid limit parameter: must be a positive integer." });
+        }
+        if (limit > 50) {
+            limit = 50;
+        }
+
+        const rawCursor = req.query.cursor ? String(req.query.cursor).trim() : null;
+        let cursor = null;
+        if (rawCursor) {
+            if (!/^[a-zA-Z0-9_-]{1,128}$/.test(rawCursor)) {
+                return res.status(400).json({ error: "Invalid cursor format: must be a valid alphanumeric document identifier." });
+            }
+            cursor = rawCursor;
+        }
+
+        const sortOrder = req.query.sortOrder === "asc" ? "asc" : "desc";
+
+        let startMillis = null;
+        if (req.query.startDate) {
+            startMillis = Date.parse(req.query.startDate);
+            if (isNaN(startMillis)) {
+                return res.status(400).json({ error: "Invalid startDate format: expected valid ISO 8601 or YYYY-MM-DD string." });
+            }
+        }
+
+        let endMillis = null;
+        if (req.query.endDate) {
+            endMillis = Date.parse(req.query.endDate);
+            if (isNaN(endMillis)) {
+                return res.status(400).json({ error: "Invalid endDate format: expected valid ISO 8601 or YYYY-MM-DD string." });
+            }
+            if (req.query.endDate.length === 10) {
+                endMillis += 86399999;
+            }
+        }
+
+        if (startMillis !== null && endMillis !== null && startMillis > endMillis) {
+            return res.status(400).json({ error: "startDate cannot be after endDate." });
+        }
+
+        let query = db.collection("assessments");
+
+        if (userId) {
+            query = query.where("userId", "==", userId);
+        }
+
+        if (risk !== "all") {
+            query = query.where("risk", "==", risk);
+        }
+
+        if (startMillis !== null) {
+            const startTimestamp = admin.firestore.Timestamp.fromMillis(startMillis);
+            query = query.where("completedAt", ">=", startTimestamp);
+        }
+
+        if (endMillis !== null) {
+            const endTimestamp = admin.firestore.Timestamp.fromMillis(endMillis);
+            query = query.where("completedAt", "<=", endTimestamp);
+        }
+
+        query = query
+            .orderBy("completedAt", sortOrder)
+            .orderBy(FieldPath.documentId(), sortOrder);
+
+        if (cursor) {
+            const cursorDoc = await db.collection("assessments").doc(cursor).get();
+            if (!cursorDoc.exists) {
+                return res.status(400).json({ error: "Cursor document not found or invalid." });
+            }
+            query = query.startAfter(cursorDoc);
+        }
+
+        const snapshot = await query.limit(limit + 1).get();
+        const hasNext = snapshot.docs.length > limit;
+        const pageDocs = hasNext ? snapshot.docs.slice(0, limit) : snapshot.docs;
+        const nextCursor = hasNext && pageDocs.length > 0 ? pageDocs[pageDocs.length - 1].id : null;
+
+        const assessments = pageDocs.map((docSnap) => sanitizeAssessmentRecord(docSnap.id, docSnap.data()));
+
+        return res.json({
+            success: true,
+            data: {
+                assessments,
+                pagination: {
+                    limit,
+                    hasNext,
+                    nextCursor,
+                    count: assessments.length,
+                },
+                filters: {
+                    userId: userId || null,
+                    risk: risk !== "all" ? risk : null,
+                    startDate: startMillis !== null ? new Date(startMillis).toISOString() : null,
+                    endDate: endMillis !== null ? new Date(endMillis).toISOString() : null,
+                    sortOrder,
+                },
+            },
+        });
+    } catch (err) {
+        console.error("[admin/assessments] Error querying historical assessments:", err.message);
+        return res.status(500).json({ error: "Failed to retrieve historical assessments. Please try again later." });
+    }
+}
+
+// ── GET /api/admin/assessments/analytics (Global Historical Assessment Analytics)
+router.get("/assessments/analytics", async (req, res) => {
+    try {
+        const validRisks = ["all", "Low Risk", "Moderate Risk", "High Risk", "Unknown"];
+        const risk = req.query.risk || "all";
+        if (!validRisks.includes(risk)) {
+            return res.status(400).json({ error: "Invalid risk filter. Allowed values: all, Low Risk, Moderate Risk, High Risk, Unknown." });
+        }
+
+        let startMillis = null;
+        if (req.query.startDate) {
+            startMillis = Date.parse(req.query.startDate);
+            if (isNaN(startMillis)) {
+                return res.status(400).json({ error: "Invalid startDate format: expected valid ISO 8601 or YYYY-MM-DD string." });
+            }
+        }
+
+        let endMillis = null;
+        if (req.query.endDate) {
+            endMillis = Date.parse(req.query.endDate);
+            if (isNaN(endMillis)) {
+                return res.status(400).json({ error: "Invalid endDate format: expected valid ISO 8601 or YYYY-MM-DD string." });
+            }
+            if (req.query.endDate.length === 10) {
+                endMillis += 86399999;
+            }
+        }
+
+        if (startMillis !== null && endMillis !== null && startMillis > endMillis) {
+            return res.status(400).json({ error: "startDate cannot be after endDate." });
+        }
+
+        const studentId = req.query.studentId ? String(req.query.studentId).trim() : null;
+        if (studentId && !/^[a-zA-Z0-9_-]{1,128}$/.test(studentId)) {
+            return res.status(400).json({ error: "Invalid studentId parameter." });
+        }
+
+        let query = db.collection("assessments");
+
+        if (studentId) {
+            query = query.where("userId", "==", studentId);
+        }
+
+        if (risk !== "all") {
+            query = query.where("risk", "==", risk);
+        }
+
+        if (startMillis !== null) {
+            const startTimestamp = admin.firestore.Timestamp.fromMillis(startMillis);
+            query = query.where("completedAt", ">=", startTimestamp);
+        }
+
+        if (endMillis !== null) {
+            const endTimestamp = admin.firestore.Timestamp.fromMillis(endMillis);
+            query = query.where("completedAt", "<=", endTimestamp);
+        }
+
+        query = query.orderBy("completedAt", "desc");
+
+        const snapshot = await query.get();
+        const totalAssessments = snapshot.size;
+
+        if (totalAssessments === 0) {
+            return res.json({
+                success: true,
+                data: {
+                    totalAssessments: 0,
+                    uniqueStudentsAssessed: 0,
+                    riskDistribution: {
+                        "Low Risk": 0,
+                        "Moderate Risk": 0,
+                        "High Risk": 0,
+                        "Unknown": 0,
+                    },
+                    averageScore: null,
+                    averageAccuracy: null,
+                    subScoresAverage: {
+                        voiceAccuracy: null,
+                        letterScore: null,
+                        wordScore: null,
+                    },
+                    assessmentVolumeOverTime: [],
+                    riskTrendsOverTime: [],
+                    scoreTrendsOverTime: [],
+                    hasSufficientCohortData: false,
+                    cohorts: [],
+                    notice: "No historical assessments found matching the selected criteria.",
+                },
+            });
+        }
+
+        const studentSet = new Set();
+        const riskDistribution = {
+            "Low Risk": 0,
+            "Moderate Risk": 0,
+            "High Risk": 0,
+            "Unknown": 0,
+        };
+
+        let scoreSum = 0;
+        let scoreCount = 0;
+        let accuracySum = 0;
+        let accuracyCount = 0;
+
+        let voiceSum = 0;
+        let voiceCount = 0;
+        let letterSum = 0;
+        let letterCount = 0;
+        let wordSum = 0;
+        let wordCount = 0;
+
+        const dateVolumeMap = {};
+        const dateRiskMap = {};
+        const dateScoreMap = {};
+        const cohortMap = {};
+
+        snapshot.forEach((docSnap) => {
+            const d = docSnap.data();
+            if (d.userId) studentSet.add(d.userId);
+
+            const r = d.risk || "Unknown";
+            if (riskDistribution[r] !== undefined) {
+                riskDistribution[r]++;
+            } else {
+                riskDistribution["Unknown"]++;
+            }
+
+            if (typeof d.score === "number" && !isNaN(d.score)) {
+                scoreSum += Math.min(100, Math.max(0, d.score));
+                scoreCount++;
+            }
+
+            if (typeof d.accuracy === "number" && !isNaN(d.accuracy)) {
+                accuracySum += Math.min(100, Math.max(0, d.accuracy));
+                accuracyCount++;
+            }
+
+            if (typeof d.subScores?.voiceAccuracy === "number") {
+                voiceSum += d.subScores.voiceAccuracy;
+                voiceCount++;
+            }
+            if (typeof d.subScores?.letterScore === "number") {
+                letterSum += d.subScores.letterScore;
+                letterCount++;
+            }
+            if (typeof d.subScores?.wordScore === "number") {
+                wordSum += d.subScores.wordScore;
+                wordCount++;
+            }
+
+            const millis = parseTimestampMillis(d.completedAt || d.createdAt);
+            if (millis) {
+                const dateKey = new Date(millis).toISOString().slice(0, 10);
+                dateVolumeMap[dateKey] = (dateVolumeMap[dateKey] || 0) + 1;
+
+                if (!dateRiskMap[dateKey]) {
+                    dateRiskMap[dateKey] = { low: 0, moderate: 0, high: 0, unknown: 0 };
+                }
+                if (r === "Low Risk") dateRiskMap[dateKey].low++;
+                else if (r === "Moderate Risk") dateRiskMap[dateKey].moderate++;
+                else if (r === "High Risk") dateRiskMap[dateKey].high++;
+                else dateRiskMap[dateKey].unknown++;
+
+                if (!dateScoreMap[dateKey]) {
+                    dateScoreMap[dateKey] = { scoreSum: 0, scoreCount: 0, accSum: 0, accCount: 0 };
+                }
+                if (typeof d.score === "number") {
+                    dateScoreMap[dateKey].scoreSum += d.score;
+                    dateScoreMap[dateKey].scoreCount++;
+                }
+                if (typeof d.accuracy === "number") {
+                    dateScoreMap[dateKey].accSum += d.accuracy;
+                    dateScoreMap[dateKey].accCount++;
+                }
+
+                const monthKey = dateKey.slice(0, 7);
+                if (!cohortMap[monthKey]) {
+                    cohortMap[monthKey] = {
+                        students: new Set(),
+                        count: 0,
+                        scoreSum: 0,
+                        scoreCount: 0,
+                        accSum: 0,
+                        accCount: 0,
+                        low: 0,
+                        moderate: 0,
+                        high: 0,
+                    };
+                }
+                cohortMap[monthKey].count++;
+                if (d.userId) cohortMap[monthKey].students.add(d.userId);
+                if (typeof d.score === "number") {
+                    cohortMap[monthKey].scoreSum += d.score;
+                    cohortMap[monthKey].scoreCount++;
+                }
+                if (typeof d.accuracy === "number") {
+                    cohortMap[monthKey].accSum += d.accuracy;
+                    cohortMap[monthKey].accCount++;
+                }
+                if (r === "Low Risk") cohortMap[monthKey].low++;
+                else if (r === "Moderate Risk") cohortMap[monthKey].moderate++;
+                else if (r === "High Risk") cohortMap[monthKey].high++;
+            }
+        });
+
+        const sortedDates = Object.keys(dateVolumeMap).sort();
+        const assessmentVolumeOverTime = sortedDates.map((date) => ({
+            date,
+            label: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            count: dateVolumeMap[date],
+        }));
+
+        const riskTrendsOverTime = sortedDates.map((date) => ({
+            date,
+            label: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            lowRisk: dateRiskMap[date]?.low || 0,
+            moderateRisk: dateRiskMap[date]?.moderate || 0,
+            highRisk: dateRiskMap[date]?.high || 0,
+            unknown: dateRiskMap[date]?.unknown || 0,
+        }));
+
+        const scoreTrendsOverTime = sortedDates.map((date) => {
+            const sc = dateScoreMap[date];
+            return {
+                date,
+                label: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                avgScore: sc?.scoreCount ? Math.round((sc.scoreSum / sc.scoreCount) * 10) / 10 : null,
+                avgAccuracy: sc?.accCount ? Math.round((sc.accSum / sc.accCount) * 10) / 10 : null,
+                count: sc?.scoreCount || 0,
+            };
+        });
+
+        const hasSufficientCohortData = totalAssessments >= 2 && Object.keys(cohortMap).length >= 1;
+        let cohorts = [];
+        if (hasSufficientCohortData) {
+            const sortedCohortKeys = Object.keys(cohortMap).sort();
+            cohorts = sortedCohortKeys.map((k) => {
+                const c = cohortMap[k];
+                const [year, month] = k.split("-");
+                const cohortDate = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1);
+                return {
+                    cohort: k,
+                    label: cohortDate.toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+                    studentCount: c.students.size,
+                    assessmentCount: c.count,
+                    avgScore: c.scoreCount ? Math.round((c.scoreSum / c.scoreCount) * 10) / 10 : null,
+                    avgAccuracy: c.accCount ? Math.round((c.accSum / c.accCount) * 10) / 10 : null,
+                    riskDistribution: {
+                        low: c.low,
+                        moderate: c.moderate,
+                        high: c.high,
+                    },
+                };
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                totalAssessments,
+                uniqueStudentsAssessed: studentSet.size,
+                riskDistribution,
+                averageScore: scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 10) / 10 : null,
+                averageAccuracy: accuracyCount > 0 ? Math.round((accuracySum / accuracyCount) * 10) / 10 : null,
+                subScoresAverage: {
+                    voiceAccuracy: voiceCount > 0 ? Math.round((voiceSum / voiceCount) * 10) / 10 : null,
+                    letterScore: letterCount > 0 ? Math.round((letterSum / letterCount) * 10) / 10 : null,
+                    wordScore: wordCount > 0 ? Math.round((wordSum / wordCount) * 10) / 10 : null,
+                },
+                assessmentVolumeOverTime,
+                riskTrendsOverTime,
+                scoreTrendsOverTime,
+                hasSufficientCohortData,
+                cohorts,
+                filters: {
+                    risk: risk !== "all" ? risk : null,
+                    startDate: startMillis !== null ? new Date(startMillis).toISOString() : null,
+                    endDate: endMillis !== null ? new Date(endMillis).toISOString() : null,
+                    studentId: studentId || null,
+                },
+            },
+        });
+    } catch (err) {
+        console.error("[admin/assessments/analytics] Error:", err.message);
+        return res.status(500).json({ error: "Failed to generate historical assessment analytics." });
+    }
+});
+
+// ── GET /api/admin/assessments (Super Admin Paginated Assessment History) ───────
+router.get("/assessments", async (req, res) => {
+    return handleHistoricalAssessmentQuery(req, res);
+});
+
+// ── GET /api/admin/users/:userId/assessments (Specific Student Assessment History)
+router.get("/users/:userId/assessments", async (req, res) => {
+    const { userId } = req.params;
+    return handleHistoricalAssessmentQuery(req, res, userId);
+});
+
 module.exports = router;
 

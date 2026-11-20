@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import { generateReportPDF } from "../utils/generateReportPDF";
 import toast from "react-hot-toast";
+import StudentAssessmentHistory from "../components/student/StudentAssessmentHistory";
 
 export default function TeacherDashboard() {
 
@@ -23,6 +24,7 @@ export default function TeacherDashboard() {
     const [activityCount, setActivityCount] = useState(0);
     const [recentLogs, setRecentLogs] = useState([]);
     const [teacherStudents, setTeacherStudents] = useState([]);
+    const [activeHistoryStudent, setActiveHistoryStudent] = useState(null);
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [showPinModal, setShowPinModal] = useState(false);
     const [enteredPin, setEnteredPin] = useState("");
@@ -65,6 +67,9 @@ export default function TeacherDashboard() {
                 setTotalStudents(permissionsSnap.size || allowedStudents.length);
                 setSharedReports(shared);
                 setTeacherStudents(allowedStudents);
+                if (allowedStudents.length > 0) {
+                    setActiveHistoryStudent((prev) => prev || allowedStudents[0]);
+                }
 
             // Activity Logs
             const logsSnap = await getDocs(
@@ -410,14 +415,26 @@ export default function TeacherDashboard() {
 
                             </div>
 
-                            <button
-                                onClick={() =>
-                                    setSelectedStudent(student)
-                                }
-                                className="mt-4 px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-400 to-pink-400 text-black font-bold"
-                            >
-                                📄 View Report
-                            </button>
+                            <div className="flex flex-wrap gap-3 mt-4">
+                                <button
+                                    onClick={() =>
+                                        setSelectedStudent(student)
+                                    }
+                                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-400 to-pink-400 text-black font-bold"
+                                >
+                                    📄 View Report
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setActiveHistoryStudent(student);
+                                        const el = document.getElementById("student-history-section");
+                                        if (el) el.scrollIntoView({ behavior: "smooth" });
+                                    }}
+                                    className="px-5 py-2 rounded-xl bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold hover:bg-cyan-500/30 transition-all flex items-center gap-2"
+                                >
+                                    📈 View History & Progress
+                                </button>
+                            </div>
 
                         </div>
 
@@ -425,6 +442,59 @@ export default function TeacherDashboard() {
 
                 </div>
 
+            </div>
+
+            {/* Historical Assessment & Progress Section for Authorized Students */}
+            <div id="student-history-section" className="mt-8">
+                {teacherStudents.length > 0 ? (
+                    <div className="space-y-4">
+                        {/* Student Selector Bar */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl border border-white/10 bg-slate-900/60 backdrop-blur-xl">
+                            <div>
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                    🎓 Student Progress Tracker
+                                </h3>
+                                <p className="text-xs text-slate-400 mt-0.5">
+                                    Viewing historical assessments for students who granted teacherAccess consent.
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <label htmlFor="teacher-student-select" className="text-xs text-slate-300 font-medium">
+                                    Selected Student:
+                                </label>
+                                <select
+                                    id="teacher-student-select"
+                                    value={activeHistoryStudent?.id || ""}
+                                    onChange={(e) => {
+                                        const found = teacherStudents.find((s) => s.id === e.target.value);
+                                        if (found) setActiveHistoryStudent(found);
+                                    }}
+                                    className="px-3 py-2 rounded-xl bg-slate-800 border border-white/15 text-white text-sm focus:outline-none focus:border-cyan-400"
+                                >
+                                    {teacherStudents.map((s) => (
+                                        <option key={s.id} value={s.id} className="bg-slate-900 text-white">
+                                            {s.name} ({s.email})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        {activeHistoryStudent && (
+                            <StudentAssessmentHistory
+                                userId={activeHistoryStudent.id}
+                                viewerRole="teacher"
+                                studentName={activeHistoryStudent.name}
+                            />
+                        )}
+                    </div>
+                ) : (
+                    <div className="p-8 rounded-3xl border border-white/10 bg-slate-900/40 backdrop-blur-xl text-center space-y-3">
+                        <p className="text-slate-400 text-sm">
+                            No students have granted teacher access yet. Once a student enables &quot;Share with Teachers&quot; in their privacy settings, their longitudinal assessment history will appear here.
+                        </p>
+                    </div>
+                )}
             </div>
             {selectedStudent && (
 

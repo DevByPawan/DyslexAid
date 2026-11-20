@@ -467,3 +467,94 @@ export async function reportSystemIncident({ eventType, service, severity, messa
     return await callAdminApi("/system/incidents", { eventType, service, severity, message });
 }
 
+/**
+ * Fetch paginated historical assessments with cursor pagination and multi-dimensional filters.
+ * Protected by verifyAdmin.
+ */
+export async function fetchHistoricalAssessments({
+    userId = null,
+    risk = "all",
+    startDate = null,
+    endDate = null,
+    limit = 10,
+    cursor = null,
+    sortOrder = "desc",
+} = {}) {
+    try {
+        const token = await getIdToken();
+        const paramObj = {
+            risk,
+            limit: String(limit),
+            sortOrder,
+        };
+        if (userId) paramObj.userId = userId;
+        if (startDate) paramObj.startDate = startDate;
+        if (endDate) paramObj.endDate = endDate;
+        if (cursor) paramObj.cursor = cursor;
+
+        const params = new URLSearchParams(paramObj);
+        const res = await fetch(`${ADMIN_API_URL}/assessments?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (res.ok) {
+            const json = await res.json();
+            if (json.success && json.data) {
+                return json.data;
+            }
+        }
+    } catch (err) {
+        console.error("fetchHistoricalAssessments error:", err);
+    }
+    return {
+        assessments: [],
+        pagination: { limit, hasNext: false, nextCursor: null, count: 0 },
+        filters: { userId, risk: risk !== "all" ? risk : null, startDate, endDate, sortOrder },
+    };
+}
+
+/**
+ * Fetch historical assessments for a specific user.
+ * Protected by verifyAdmin.
+ */
+export async function fetchUserAssessments(userId, options = {}) {
+    if (!userId) return { assessments: [], pagination: { limit: 10, hasNext: false, nextCursor: null, count: 0 } };
+    return await fetchHistoricalAssessments({ ...options, userId });
+}
+
+/**
+ * Fetch global historical assessment analytics, risk distributions, and cohort trends.
+ * Protected by verifyAdmin.
+ */
+export async function fetchHistoricalAssessmentsAnalytics({
+    startDate = null,
+    endDate = null,
+    risk = "all",
+    studentId = null,
+} = {}) {
+    try {
+        const token = await getIdToken();
+        const paramObj = { risk };
+        if (startDate) paramObj.startDate = startDate;
+        if (endDate) paramObj.endDate = endDate;
+        if (studentId) paramObj.studentId = studentId;
+
+        const params = new URLSearchParams(paramObj);
+        const res = await fetch(`${ADMIN_API_URL}/assessments/analytics?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (res.ok) {
+            const json = await res.json();
+            if (json.success && json.data) {
+                return json.data;
+            }
+        }
+    } catch (err) {
+        console.error("fetchHistoricalAssessmentsAnalytics error:", err);
+    }
+    return null;
+}
+
+
+

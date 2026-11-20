@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
     X,
     Mail,
@@ -14,8 +14,11 @@ import {
     AlertOctagon,
     FileText,
     RefreshCw,
+    ChevronLeft,
+    ChevronRight,
+    Brain,
 } from "lucide-react";
-import { fetchUserDetails } from "../../services/adminService";
+import { fetchUserDetails, fetchUserAssessments } from "../../services/adminService";
 
 export default function UserDetailsModal({
     user,
@@ -28,6 +31,34 @@ export default function UserDetailsModal({
 }) {
     const [details, setDetails] = useState(null);
     const [loading, setLoading] = useState(true);
+
+    // Historical Assessments State (For Students)
+    const [historicalAssessments, setHistoricalAssessments] = useState([]);
+    const [loadingAssessments, setLoadingAssessments] = useState(false);
+    const [asmtHasNext, setAsmtHasNext] = useState(false);
+    const [asmtNextCursor, setAsmtNextCursor] = useState(null);
+    const [asmtCursorStack, setAsmtCursorStack] = useState([]);
+    const [asmtPageNumber, setAsmtPageNumber] = useState(1);
+
+    const loadStudentAssessments = useCallback(async (targetCursor = null) => {
+        if (!user?.id || user?.role !== "student") return;
+        setLoadingAssessments(true);
+        try {
+            const res = await fetchUserAssessments(user.id, {
+                limit: 4,
+                cursor: targetCursor,
+            });
+            if (res) {
+                setHistoricalAssessments(res.assessments || []);
+                setAsmtHasNext(res.pagination?.hasNext || false);
+                setAsmtNextCursor(res.pagination?.nextCursor || null);
+            }
+        } catch (err) {
+            console.error("Failed to load historical assessments for user:", err);
+        } finally {
+            setLoadingAssessments(false);
+        }
+    }, [user?.id, user?.role]);
 
     useEffect(() => {
         let isMounted = true;
@@ -48,10 +79,30 @@ export default function UserDetailsModal({
             }
         }
         load();
+        if (user?.role === "student") {
+            loadStudentAssessments(null);
+        }
         return () => {
             isMounted = false;
         };
-    }, [user]);
+    }, [user, loadStudentAssessments]);
+
+    const handleNextAsmtPage = () => {
+        if (!asmtHasNext || !asmtNextCursor) return;
+        setAsmtCursorStack((prev) => [...prev, asmtNextCursor]);
+        setAsmtPageNumber((p) => p + 1);
+        loadStudentAssessments(asmtNextCursor);
+    };
+
+    const handlePrevAsmtPage = () => {
+        if (asmtCursorStack.length === 0) return;
+        const newStack = [...asmtCursorStack];
+        newStack.pop();
+        const prevCursor = newStack.length > 0 ? newStack[newStack.length - 1] : null;
+        setAsmtCursorStack(newStack);
+        setAsmtPageNumber((p) => Math.max(1, p - 1));
+        loadStudentAssessments(prevCursor);
+    };
 
     if (!user) return null;
 
@@ -242,6 +293,113 @@ export default function UserDetailsModal({
                                             <div>Voice Score: <span className="font-semibold text-white">{data.voiceScore ?? "—"}</span></div>
                                             <div>Letter Score: <span className="font-semibold text-white">{data.letterScore ?? "—"}</span></div>
                                             <div>Word Score: <span className="font-semibold text-white">{data.wordScore ?? "—"}</span></div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Student Historical Assessments (Phase 6.5 Super Admin User View) */}
+                            {data.role === "student" && (
+                                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                                            <Brain size={14} />
+                                            Historical Screening Attempts ({historicalAssessments.length})
+                                        </h4>
+                                        <button
+                                            type="button"
+                                            onClick={() => loadStudentAssessments(null)}
+                                            disabled={loadingAssessments}
+                                            className="text-[11px] text-slate-400 hover:text-white flex items-center gap-1 disabled:opacity-50"
+                                        >
+                                            <RefreshCw size={11} className={loadingAssessments ? "animate-spin" : ""} />
+                                            Refresh
+                                        </button>
+                                    </div>
+
+                                    {loadingAssessments && historicalAssessments.length === 0 ? (
+                                        <div className="py-6 text-center text-xs text-slate-400 animate-pulse">
+                                            Loading historical assessment records...
+                                        </div>
+                                    ) : historicalAssessments.length === 0 ? (
+                                        <p className="text-xs text-slate-500 italic py-2">
+                                            No historical assessment records recorded for this student.
+                                        </p>
+                                    ) : (
+                                        <div className="space-y-2.5">
+                                            {historicalAssessments.map((asmt) => (
+                                                <div
+                                                    key={asmt.id}
+                                                    className="p-3 rounded-xl bg-white/5 border border-white/5 text-xs space-y-2 hover:border-cyan-500/20 transition-all"
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-semibold text-white">
+                                                                Score: {asmt.score}%
+                                                            </span>
+                                                            <span className="text-cyan-300">
+                                                                (Acc: {asmt.accuracy}%)
+                                                            </span>
+                                                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                                                asmt.risk === "Low Risk"
+                                                                    ? "bg-emerald-500/20 text-emerald-300"
+                                                                    : asmt.risk === "Moderate Risk"
+                                                                    ? "bg-amber-500/20 text-amber-300"
+                                                                    : "bg-rose-500/20 text-rose-300"
+                                                            }`}>
+                                                                {asmt.risk}
+                                                            </span>
+                                                        </div>
+                                                        <span className="text-[10px] text-slate-400 font-mono">
+                                                            {asmt.completedAt ? new Date(asmt.completedAt).toLocaleDateString() : "—"}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                                                        <span>Voice: <strong className="text-white">{asmt.subScores?.voiceAccuracy ?? 0}%</strong></span>
+                                                        <span>Letter: <strong className="text-white">{asmt.subScores?.letterScore ?? 0}/7</strong></span>
+                                                        <span>Word: <strong className="text-white">{asmt.subScores?.wordScore ?? 0}/7</strong></span>
+                                                    </div>
+
+                                                    {((asmt.insights?.strengths?.length || 0) > 0 || (asmt.insights?.improvements?.length || 0) > 0) && (
+                                                        <div className="text-[10px] space-y-1 pt-1 border-t border-white/5">
+                                                            {asmt.insights?.strengths?.length > 0 && (
+                                                                <p className="text-emerald-300 truncate">
+                                                                    ✓ Strengths: {asmt.insights.strengths.join(", ")}
+                                                                </p>
+                                                            )}
+                                                            {asmt.insights?.improvements?.length > 0 && (
+                                                                <p className="text-amber-300 truncate">
+                                                                    • Target Areas: {asmt.insights.improvements.join(", ")}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            {/* Cursor Pagination in Modal */}
+                                            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400">
+                                                <span>Page {asmtPageNumber}</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={handlePrevAsmtPage}
+                                                        disabled={asmtPageNumber === 1 || loadingAssessments}
+                                                        className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white flex items-center gap-1"
+                                                    >
+                                                        <ChevronLeft size={12} /> Prev
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleNextAsmtPage}
+                                                        disabled={!asmtHasNext || loadingAssessments}
+                                                        className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white flex items-center gap-1"
+                                                    >
+                                                        Next <ChevronRight size={12} />
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
                                 </div>

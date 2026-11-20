@@ -82,6 +82,17 @@ const submitAssessment = () => {
 
     const accuracy = calculateAccuracy();
 
+    let existingId;
+    try {
+        const existingProgress = JSON.parse(localStorage.getItem("assessmentProgress") || "{}");
+        existingId = existingProgress?.assessmentId || localStorage.getItem("currentAssessmentId");
+    } catch {
+        existingId = null;
+    }
+
+    const assessmentId = existingId || `asmt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    localStorage.setItem("currentAssessmentId", assessmentId);
+
     // Existing code
     localStorage.setItem(
         "voiceScore",
@@ -92,6 +103,7 @@ const submitAssessment = () => {
     localStorage.setItem(
         "assessmentProgress",
         JSON.stringify({
+            assessmentId,
             step: "letter",
             voiceScore: accuracy,
             letterScore: 0,
